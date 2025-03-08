@@ -42,14 +42,14 @@ class JointDiffusionModel(nn.Module):
         Computes the model's prediction as in Equation (4):
         u(x_t, y, t; θ) = M(x_t * W_in, y, t; θ) * W_out
         Here, y is the conditioning (text tokens) with shape [B, L, embed_dim].
-        t is provided as a noise level tensor with shape [B, 1]. To concatenate them 
-        along the sequence dimension, we expand t to have the same last dimension.
+        t is provided as a noise level tensor with shape [B, 1]. We expand t to [B, 1, embed_dim]
+        so that it can be concatenated with y along the sequence dimension.
         """
         # Project video tokens
         x_proj = self.W_in(x_t)
-        # Expand t from shape [B, 1] to [B, 1, embed_dim] based on Config.TEXT_EMBED_DIM
+        # Expand t from [B, 1] to [B, 1, Config.TEXT_EMBED_DIM]
         t_expanded = t.unsqueeze(-1).expand(-1, 1, Config.TEXT_EMBED_DIM)
-        # Concatenate the conditioning text tokens and time tokens along the sequence dim.
+        # Concatenate the conditioning text tokens and time tokens along the sequence dimension.
         conditioning = torch.cat([y, t_expanded], dim=1)
         # Transformer expects input with shape [sequence, batch, feature]
         src = x_proj.transpose(0, 1)
@@ -66,7 +66,7 @@ class JointDiffusionModel(nn.Module):
         """
         joint_input = torch.cat([x_t, d_t], dim=-1)
         joint_proj = self.W_in_plus(joint_input)
-        # Same fix as before: expand t to match text token dimensions.
+        # Expand t to match the conditioning text tokens
         t_expanded = t.unsqueeze(-1).expand(-1, 1, Config.TEXT_EMBED_DIM)
         conditioning = torch.cat([y, t_expanded], dim=1)
         src = joint_proj.transpose(0, 1)
@@ -85,19 +85,20 @@ class JointDiffusionModel(nn.Module):
         If joint==True, use extended Equation (6):
          v_t+ = [v_xt, v_dt] and compare with u+([x_t,d_t], y, t;θ')
         """
-        # Sample a noise level uniformly in [0, 1]
-        noise_level = t  # t is provided as noise level in [0,1]
-        x_t = noise_level * x1 + (1 - noise_level) * x0  # Equation (1)
-        v_t = x1 - x0  # Equation (2)
+        # Reshape noise level t from [B, 1] to [B, 1, 1] for proper broadcasting.
+        noise_level = t.view(t.shape[0], 1, 1)
+        # Equation (1): x_t = t * x1 + (1 - t) * x0
+        x_t = noise_level * x1 + (1 - noise_level) * x0
+        # Equation (2): v_t = x1 - x0
+        v_t = x1 - x0
 
         if not joint:
             prediction = self.forward_appearance(x_t, y, t)
             loss = ((prediction - v_t) ** 2).mean()
         else:
-            # d_t = noise applied to motion latent d; compute joint input.
+            # Compute the noise for motion tokens.
             d_t = noise_level * d1 + (1 - noise_level) * d0
-            joint_input = torch.cat([x_t, d_t], dim=-1)
-            # Create joint velocity target v_t+ = [x1 - x0, d1 - d0]
+            # Create joint velocity target v_t+ = [ (x1 - x0), (d1 - d0) ]
             v_t_plus = torch.cat([x1 - x0, d1 - d0], dim=-1)
             prediction = self.forward_joint(x_t, d_t, y, t)
             loss = ((prediction - v_t_plus) ** 2).mean()
@@ -125,7 +126,7 @@ class JointDiffusionModel(nn.Module):
         # log p(x_t|y) prediction (only appearance)
         logp_app = self.forward_appearance(x_t, y, torch.zeros_like(y))
         score_app = torch.autograd.grad(logp_app.sum(), x_t, create_graph=True)
-        # Combine scores following the log derivative formula
+        # Combine scores following the log derivative formula.
         guided_score_x = (1 + w1 + w2) * score_joint[0] - w1 * score_uncond[0] - w2 * score_app[0]
         guided_score_d = (1 + w1 + w2) * score_joint[1] - w1 * score_uncond[1]
         return guided_score_x, guided_score_d
