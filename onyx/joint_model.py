@@ -41,13 +41,17 @@ class JointDiffusionModel(nn.Module):
         """
         Computes the model's prediction as in Equation (4):
         u(x_t, y, t; θ) = M(x_t * W_in, y, t; θ) * W_out
-        Here, y is the conditioning (text tokens).
+        Here, y is the conditioning (text tokens) with shape [B, L, embed_dim].
+        t is provided as a noise level tensor with shape [B, 1]. To concatenate them 
+        along the sequence dimension, we expand t to have the same last dimension.
         """
-        # project tokens
+        # Project video tokens
         x_proj = self.W_in(x_t)
-        # For simplicity, we assume y and t are concatenated as extra tokens.
-        conditioning = torch.cat([y, t], dim=1)
-        # Transformer expects input [S, B, E], so we transpose.
+        # Expand t from shape [B, 1] to [B, 1, embed_dim] based on Config.TEXT_EMBED_DIM
+        t_expanded = t.unsqueeze(-1).expand(-1, 1, Config.TEXT_EMBED_DIM)
+        # Concatenate the conditioning text tokens and time tokens along the sequence dim.
+        conditioning = torch.cat([y, t_expanded], dim=1)
+        # Transformer expects input with shape [sequence, batch, feature]
         src = x_proj.transpose(0, 1)
         tgt = conditioning.transpose(0, 1)
         transformer_out = self.transformer(src, tgt)
@@ -62,7 +66,9 @@ class JointDiffusionModel(nn.Module):
         """
         joint_input = torch.cat([x_t, d_t], dim=-1)
         joint_proj = self.W_in_plus(joint_input)
-        conditioning = torch.cat([y, t], dim=1)
+        # Same fix as before: expand t to match text token dimensions.
+        t_expanded = t.unsqueeze(-1).expand(-1, 1, Config.TEXT_EMBED_DIM)
+        conditioning = torch.cat([y, t_expanded], dim=1)
         src = joint_proj.transpose(0, 1)
         tgt = conditioning.transpose(0, 1)
         transformer_out = self.transformer(src, tgt)
@@ -108,7 +114,6 @@ class JointDiffusionModel(nn.Module):
         and scales them appropriately.
         """
         # For this dummy implementation we assume gradients are produced via autograd.
-        # In practice, you would compute (or approximate) the three score functions separately.
         x_t.requires_grad_(True)
         d_t.requires_grad_(True)
         # log p(x_t,d_t|y) prediction
