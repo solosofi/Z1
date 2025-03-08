@@ -23,4 +23,3 @@ def tokens_to_video(video_tokens):
         frames.append(np.uint8(img))
     # Stack frames into a video list that imageio can write as a video
     return frames
-```
