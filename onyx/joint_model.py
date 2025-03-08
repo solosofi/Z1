@@ -33,7 +33,7 @@ class JointDiffusionModel(nn.Module):
         # Projection matrices for appearance (W_in and W_out)
         self.W_in = nn.Linear(Config.VIDEO_TOKEN_DIM, Config.TRANSFORMER_DIM)
         self.W_out = nn.Linear(Config.TRANSFORMER_DIM, Config.VIDEO_TOKEN_DIM)
-        # Extended projection matrices for joint appearance-motion modeling
+        # Extended projection matrices for joint appearance-motion modeling (input dimension = 256+128=384)
         self.W_in_plus = nn.Linear(Config.VIDEO_TOKEN_DIM + Config.MOTION_TOKEN_DIM, Config.TRANSFORMER_DIM)
         self.W_out_plus = nn.Linear(Config.TRANSFORMER_DIM, Config.VIDEO_TOKEN_DIM + Config.MOTION_TOKEN_DIM)
 
@@ -42,8 +42,8 @@ class JointDiffusionModel(nn.Module):
         Computes the model's prediction as in Equation (4):
         u(x_t, y, t; θ) = M(x_t * W_in, y, t; θ) * W_out
         Here, y is the conditioning (text tokens) with shape [B, L, embed_dim].
-        t is provided as a noise level tensor with shape [B, 1]. We expand t to [B, 1, embed_dim]
-        so that it can be concatenated with y along the sequence dimension.
+        t is provided as a noise level tensor with shape [B, 1]. It is expanded to
+        [B, 1, embed_dim] so it can be concatenated with y.
         """
         # Project video tokens
         x_proj = self.W_in(x_t)
@@ -66,7 +66,7 @@ class JointDiffusionModel(nn.Module):
         """
         joint_input = torch.cat([x_t, d_t], dim=-1)
         joint_proj = self.W_in_plus(joint_input)
-        # Expand t to match the conditioning text tokens
+        # Expand t to match the conditioning text dimensions.
         t_expanded = t.unsqueeze(-1).expand(-1, 1, Config.TEXT_EMBED_DIM)
         conditioning = torch.cat([y, t_expanded], dim=1)
         src = joint_proj.transpose(0, 1)
@@ -80,10 +80,9 @@ class JointDiffusionModel(nn.Module):
         """
         Compute training loss.
         If joint==False, use Equation (3):
-         L = E[ || u(x_t, y, t;θ) - v_t ||^2 ]
-        with v_t = x1 - x0.
+         L = E[ || u(x_t, y, t;θ) - v_t ||^2 ] with v_t = x1 - x0.
         If joint==True, use extended Equation (6):
-         v_t+ = [v_xt, v_dt] and compare with u+([x_t,d_t], y, t;θ')
+         v_t+ = [ (x1 - x0), (d1 - d0) ] and compare with u+([x_t,d_t], y, t;θ')
         """
         # Reshape noise level t from [B, 1] to [B, 1, 1] for proper broadcasting.
         noise_level = t.view(t.shape[0], 1, 1)
@@ -96,9 +95,9 @@ class JointDiffusionModel(nn.Module):
             prediction = self.forward_appearance(x_t, y, t)
             loss = ((prediction - v_t) ** 2).mean()
         else:
-            # Compute the noise for motion tokens.
+            # Compute noise for motion latent.
             d_t = noise_level * d1 + (1 - noise_level) * d0
-            # Create joint velocity target v_t+ = [ (x1 - x0), (d1 - d0) ]
+            # Create joint velocity target: v_t+ = [ x1 - x0, d1 - d0 ]
             v_t_plus = torch.cat([x1 - x0, d1 - d0], dim=-1)
             prediction = self.forward_joint(x_t, d_t, y, t)
             loss = ((prediction - v_t_plus) ** 2).mean()
@@ -107,26 +106,23 @@ class JointDiffusionModel(nn.Module):
     def inner_guidance(self, x_t, d_t, y, w1=Config.GUIDANCE_SCALE_TEXT, w2=Config.GUIDANCE_SCALE_MOTION):
         """
         Implements the inner-guidance sampling modification:
-        ∇ log p~(x_t, d_t|y)
-         = (1+w1+w2)∇ log p(x_t,d_t|y)
+        ∇ log p~(x_t, d_t | y)
+         = (1 + w1 + w2) ∇ log p(x_t,d_t|y)
            - w1 ∇ log p(x_t,d_t)
            - w2 ∇ log p(x_t|y)
-        In practice, this function uses the gradients computed by the model
-        and scales them appropriately.
+        In practice, this function uses the gradients computed by the model and scales them appropriately.
         """
         # For this dummy implementation we assume gradients are produced via autograd.
         x_t.requires_grad_(True)
         d_t.requires_grad_(True)
-        # log p(x_t,d_t|y) prediction
+        # Log probability predictions.
         logp_joint = self.forward_joint(x_t, d_t, y, torch.zeros_like(y))
         score_joint = torch.autograd.grad(logp_joint.sum(), (x_t, d_t), create_graph=True)
-        # log p(x_t,d_t) prediction
         logp_uncond = self.forward_joint(x_t, d_t, torch.zeros_like(y), torch.zeros_like(y))
         score_uncond = torch.autograd.grad(logp_uncond.sum(), (x_t, d_t), create_graph=True)
-        # log p(x_t|y) prediction (only appearance)
         logp_app = self.forward_appearance(x_t, y, torch.zeros_like(y))
         score_app = torch.autograd.grad(logp_app.sum(), x_t, create_graph=True)
-        # Combine scores following the log derivative formula.
+        # Combine scores as per the log derivative rule.
         guided_score_x = (1 + w1 + w2) * score_joint[0] - w1 * score_uncond[0] - w2 * score_app[0]
         guided_score_d = (1 + w1 + w2) * score_joint[1] - w1 * score_uncond[1]
         return guided_score_x, guided_score_d
