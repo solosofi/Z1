@@ -37,26 +37,45 @@ class VideoTextDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.hf_dataset[idx]
-        
+
         # Process video field.
         if "video" in sample and sample["video"] is not None:
             video_sample = sample["video"]
             # If video_sample is a dict with "array", use that.
             if isinstance(video_sample, dict) and "array" in video_sample:
                 video_sample = video_sample["array"]
-            # If video_sample supports asnumpy() method (e.g. decord NDArray), use it.
-            if hasattr(video_sample, "asnumpy"):
-                video_sample = video_sample.asnumpy()
-            # Try to convert the sample to a NumPy array with float32 dtype.
-            try:
-                video_np = np.array(video_sample, dtype=np.float32)
-            except Exception as e:
-                print(f"Error converting video sample to numpy array: {e}")
-                video_np = np.random.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0]).astype(np.float32)
+            # If video_sample is a list, process each frame.
+            if isinstance(video_sample, list):
+                try:
+                    # Convert each frame, calling asnumpy() if available.
+                    frames = []
+                    for frame in video_sample:
+                        if hasattr(frame, "asnumpy"):
+                            frame = frame.asnumpy()
+                        frame_np = np.array(frame, dtype=np.float32)
+                        frames.append(frame_np)
+                    video_np = np.stack(frames)
+                except Exception as e:
+                    print(f"Error converting video sample frames to numpy array: {e}")
+                    video_np = np.random.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0]).astype(np.float32)
+            # Otherwise, if video_sample supports asnumpy(), use it.
+            elif hasattr(video_sample, "asnumpy"):
+                try:
+                    video_np = np.array(video_sample.asnumpy(), dtype=np.float32)
+                except Exception as e:
+                    print(f"Error converting video sample (asnumpy) to numpy array: {e}")
+                    video_np = np.random.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0]).astype(np.float32)
+            else:
+                # Try converting directly.
+                try:
+                    video_np = np.array(video_sample, dtype=np.float32)
+                except Exception as e:
+                    print(f"Error converting video sample to numpy array: {e}")
+                    video_np = np.random.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0]).astype(np.float32)
             video = torch.from_numpy(video_np)
         else:
             video = torch.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0])
-        
+
         # Process text: convert text to a sequence of integer token IDs.
         if "text" in sample and sample["text"]:
             text_str = sample["text"]
