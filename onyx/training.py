@@ -10,6 +10,7 @@ This file demonstrates a training pipeline:
 
 import os
 import subprocess
+import numpy as np
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
@@ -36,16 +37,26 @@ class VideoTextDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.hf_dataset[idx]
-        # Try to use the "video" key if available; otherwise generate synthetic video.
+        # Process video field.
         if "video" in sample and sample["video"] is not None:
-            video = torch.tensor(sample["video"])
+            video_sample = sample["video"]
+            if isinstance(video_sample, dict) and "array" in video_sample:
+                video_data = video_sample["array"]
+                if isinstance(video_data, np.ndarray):
+                    video = torch.from_numpy(video_data)
+                else:
+                    video = torch.tensor(video_data, dtype=torch.float32)
+            elif isinstance(video_sample, np.ndarray):
+                video = torch.from_numpy(video_sample)
+            else:
+                video = torch.tensor(video_sample, dtype=torch.float32)
         else:
             video = torch.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0])
         
         # Process text: convert text to a sequence of integer token IDs.
-        # Here we simply convert characters to their ordinal values as a placeholder tokenization.
         if "text" in sample and sample["text"]:
             text_str = sample["text"]
+            # A simple placeholder: use ordinal values of characters, padded/truncated to length 16.
             text_tokens = [ord(c) for c in text_str][:16]
             if len(text_tokens) < 16:
                 text_tokens += [0] * (16 - len(text_tokens))
