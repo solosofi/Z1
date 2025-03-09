@@ -44,11 +44,13 @@ class VideoTextDataset(Dataset):
             # If video_sample is a dict with "array", use that.
             if isinstance(video_sample, dict) and "array" in video_sample:
                 video_sample = video_sample["array"]
-            # Ensure we convert the sample to a NumPy array with the proper dtype.
+            # If video_sample supports asnumpy() method (e.g. decord NDArray), use it.
+            if hasattr(video_sample, "asnumpy"):
+                video_sample = video_sample.asnumpy()
+            # Try to convert the sample to a NumPy array with float32 dtype.
             try:
                 video_np = np.array(video_sample, dtype=np.float32)
             except Exception as e:
-                # In case of error, fallback to synthetic video.
                 print(f"Error converting video sample to numpy array: {e}")
                 video_np = np.random.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0]).astype(np.float32)
             video = torch.from_numpy(video_np)
