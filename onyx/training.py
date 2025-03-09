@@ -5,7 +5,7 @@ This file demonstrates a training pipeline:
 - Loading a video or text-to-video dataset using Hugging Face's datasets library.
 - Loss computation using the JointDiffusionModel.
 - Optimization & training loop with evaluation metrics.
-- Automatic saving of model weights after each epoch, including a git commit and push to the official repo.
+- Automatic saving of model weights after each epoch, including a git commit and push to the official repository.
 """
 
 import os
@@ -37,26 +37,23 @@ class VideoTextDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.hf_dataset[idx]
+        
         # Process video field.
         if "video" in sample and sample["video"] is not None:
             video_sample = sample["video"]
+            # If video_sample is a dict with "array", use that.
             if isinstance(video_sample, dict) and "array" in video_sample:
-                video_data = video_sample["array"]
-                if isinstance(video_data, np.ndarray):
-                    video = torch.from_numpy(video_data)
-                else:
-                    video = torch.tensor(video_data, dtype=torch.float32)
-            elif isinstance(video_sample, np.ndarray):
-                video = torch.from_numpy(video_sample)
-            else:
-                video = torch.tensor(video_sample, dtype=torch.float32)
+                video_sample = video_sample["array"]
+            # Convert video_sample to a numpy array regardless of its initial type.
+            video_np = np.asarray(video_sample)
+            video = torch.from_numpy(video_np.astype(np.float32))
         else:
             video = torch.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0])
         
         # Process text: convert text to a sequence of integer token IDs.
         if "text" in sample and sample["text"]:
             text_str = sample["text"]
-            # A simple placeholder: use ordinal values of characters, padded/truncated to length 16.
+            # A simple placeholder: convert characters to their ordinal values, padded/truncated to length 16.
             text_tokens = [ord(c) for c in text_str][:16]
             if len(text_tokens) < 16:
                 text_tokens += [0] * (16 - len(text_tokens))
