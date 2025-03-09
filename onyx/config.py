@@ -31,3 +31,8 @@ class Config:
 
     # Transformer and diffusion projection dimensions
     TRANSFORMER_DIM = VIDEO_TOKEN_DIM  # using video token dim as main transformer dimension
+
+    # Dataset settings
+    DATASET = "saiyan-world/Goku-MovieGenBench"
+    # Weights save branch for git operations
+    WEIGHTS_SAVE_BRANCH = "main"
