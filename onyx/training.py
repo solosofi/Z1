@@ -1,8 +1,8 @@
 """
 Training script for Onyx.
 
-This file demonstrates a full training pipeline:
-- Prepare the dataset by cloning from a GitHub repository.
+This file demonstrates a training pipeline:
+- Loading a video or text-to-video dataset using Hugging Face's datasets library.
 - Loss computation using the JointDiffusionModel.
 - Optimization & training loop with evaluation metrics.
 - Automatic saving of model weights after each epoch, including a git commit and push to the official repo.
@@ -13,44 +13,48 @@ import subprocess
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
+from datasets import load_dataset
 from onyx.config import Config
 from onyx.text_encoder import TextEncoder
 from onyx.video_tokenizer import VideoTokenizer
 from onyx.joint_model import JointDiffusionModel
 
-def prepare_dataset():
+class VideoTextDataset(Dataset):
     """
-    Prepare the dataset by cloning it from GitHub. This function does not use Hugging Face's load_dataset.
+    A wrapper dataset to convert Hugging Face's dataset into a torch Dataset.
+    Expected to have at least a 'text' field and, optionally, a 'video' field.
+    In case of missing video data, synthetic video data will be generated.
     """
-    dataset_dir = "data/dataset"
-    if not os.path.exists(dataset_dir):
-        os.makedirs("data", exist_ok=True)
-        clone_url = f"https://github.com/{Config.DATASET_REPO}.git"
-        print(f"Cloning dataset from {clone_url} into {dataset_dir}...")
-        ret = os.system(f"git clone {clone_url} {dataset_dir}")
-        if ret != 0:
-            print("Error cloning dataset; falling back to synthetic data.")
-    else:
-        print(f"Dataset directory '{dataset_dir}' already exists.")
-
-class SyntheticVideoDataset(Dataset):
-    """
-    Dummy Dataset that can later be adapted to load any video or text-to-video data from the cloned dataset.
-    """
-    def __init__(self, num_samples=100):
-        self.num_samples = num_samples
-        # This is where custom dataset loading from data/dataset would go.
+    def __init__(self, hf_dataset, num_frames, frame_size, motion_dim):
+        self.hf_dataset = hf_dataset
+        self.num_frames = num_frames
+        self.frame_size = frame_size
+        self.motion_dim = motion_dim
 
     def __len__(self):
-        return self.num_samples
+        return len(self.hf_dataset)
 
     def __getitem__(self, idx):
-        # Simulate video frames: [T, C, H, W]
-        video = torch.randn(Config.NUM_FRAMES, 3, Config.FRAME_SIZE[1], Config.FRAME_SIZE[0])
-        # Simulate a text prompt as random integer sequences
-        text = torch.randint(0, 10000, (16,))
-        # Simulate motion latent as random noise
-        motion = torch.randn(Config.NUM_FRAMES, Config.MOTION_TOKEN_DIM)
+        sample = self.hf_dataset[idx]
+        # Try to use the "video" key if available; otherwise generate synthetic video.
+        if "video" in sample and sample["video"] is not None:
+            video = torch.tensor(sample["video"])
+        else:
+            video = torch.randn(self.num_frames, 3, self.frame_size[1], self.frame_size[0])
+        
+        # Process text: convert text to a sequence of integer token IDs.
+        # Here we simply convert characters to their ordinal values as a placeholder tokenization.
+        if "text" in sample and sample["text"]:
+            text_str = sample["text"]
+            text_tokens = [ord(c) for c in text_str][:16]
+            if len(text_tokens) < 16:
+                text_tokens += [0] * (16 - len(text_tokens))
+            text = torch.tensor(text_tokens, dtype=torch.long)
+        else:
+            text = torch.randint(0, 10000, (16,))
+        
+        # Simulate motion latent as random noise.
+        motion = torch.randn(self.num_frames, self.motion_dim)
         return video, text, motion
 
 class Trainer:
@@ -68,9 +72,21 @@ class Trainer:
             lr=Config.LEARNING_RATE
         )
 
-        # Prepare the dataset by cloning from the configured GitHub repository.
-        prepare_dataset()
-        self.dataset = SyntheticVideoDataset()
+        # Load dataset using Hugging Face's load_dataset.
+        print(f"Loading dataset {Config.DATASET} ...")
+        hf_dataset = load_dataset(Config.DATASET)
+        # Choose the 'train' split if available, otherwise the first available split.
+        if "train" in hf_dataset:
+            train_split = hf_dataset["train"]
+        else:
+            train_split = hf_dataset[list(hf_dataset.keys())[0]]
+        
+        self.dataset = VideoTextDataset(
+            train_split,
+            num_frames=Config.NUM_FRAMES,
+            frame_size=Config.FRAME_SIZE,
+            motion_dim=Config.MOTION_TOKEN_DIM
+        )
         self.loader = DataLoader(self.dataset, batch_size=Config.BATCH_SIZE, shuffle=True)
 
     def save_weights(self, epoch: int):
@@ -85,7 +101,7 @@ class Trainer:
         file_path = f"saved_models/model_epoch_{epoch+1}.pth"
         torch.save(checkpoint, file_path)
         print(f"Saved weights locally for epoch {epoch+1} at {file_path}")
-        
+
         # Commit and push the updated weights file to the official GitHub repository.
         try:
             subprocess.check_call(["git", "add", file_path])
@@ -102,11 +118,11 @@ class Trainer:
             epoch_loss = 0.0
             for batch in self.loader:
                 video, text, motion = batch
-                video = video.to(self.device)
-                text = text.to(self.device)
-                motion = motion.to(self.device)
+                video = video.to(self.device, non_blocking=True)
+                text = text.to(self.device, non_blocking=True)
+                motion = motion.to(self.device, non_blocking=True)
 
-                # Encode text to get conditioning tokens.
+                # Encode text to obtain conditioning tokens.
                 text_encoding = self.text_encoder(text)
                 # Tokenize video frames.
                 video_tokens = self.video_tokenizer(video)
@@ -114,6 +130,7 @@ class Trainer:
                 # Dummy time noise level for training.
                 t = torch.rand(video_tokens.size(0), 1).to(self.device)
 
+                # Simulate separate inputs for joint training.
                 x1 = video_tokens
                 x0 = torch.randn_like(video_tokens)
                 d1 = motion
